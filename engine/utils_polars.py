@@ -73,7 +73,7 @@ def ensure_columns(
 # Parse raw transcript column (if entire conversation is one string)
 # ---------------------------------------------------------------------
 TRANSCRIPT_LINE_RE = re.compile(
-    r"^\[(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})\]\s*(?P<speaker>[A-Za-z ]+):\s*(?P<text>.*)$"
+    r"^\[(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})\]\s*(?P<speaker>[A-Za-z ]+):?\s*:\s*(?P<text>.*)$"
 )
 
 
