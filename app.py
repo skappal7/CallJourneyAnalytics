@@ -76,6 +76,9 @@ if up is not None:
 
     # Parse transcripts into utterances
     st.info("📄 Splitting transcript lines into speaker and timestamp segments...")
+    st.write("📋 Uploaded columns:", raw_df.columns)
+    st.write("🧾 Sample data:", raw_df.head(3).to_pandas())
+
     utter = explode_raw_transcript_column(raw_df, raw_col=text_col, call_id_col=call_id_col)
     st.success(f"Utterances extracted: {utter.height:,}")
 
