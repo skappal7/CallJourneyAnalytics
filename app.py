@@ -6,99 +6,90 @@ import time
 import altair as alt
 import polars as pl
 import streamlit as st
-from engine.utils_polars import read_any_to_polars, write_parquet, ensure_columns, explode_raw_transcript_column
+from engine.utils_polars import read_any_to_polars, explode_raw_transcript_column
 from engine.rule_engine_duckdb import load_rules, categorize_utterances, speaker_term_buckets
 from engine.ui_components import inject_branding, section
 
+# ------------------------------------------------------------
+# Streamlit App Config
+# ------------------------------------------------------------
 st.set_page_config(page_title="Customer Journey Analyzer", page_icon="🧭", layout="wide")
 inject_branding()
 
 st.markdown("""
 # 🧭 Customer Interaction Journey Analyzer
-Build explainable, rule-driven insights from call/chat transcripts — fast and at scale (Polars + DuckDB).
+Upload your call/chat transcripts and instantly extract categories, intents, and conversational journeys.
 """)
 
-# Sidebar: upload + config
+# ------------------------------------------------------------
+# Sidebar — Upload section
+# ------------------------------------------------------------
 with st.sidebar:
-    st.header("Upload Transcripts")
+    st.header("Upload Transcript File")
     up = st.file_uploader(
-        "Upload CSV / XLSX / XLS (utterance-level or raw transcript)",
+        "Upload your transcript file (CSV, XLSX, or XLS)",
         type=["csv", "xlsx", "xls", "parquet"],
-        accept_multiple_files=False,
+        accept_multiple_files=False
     )
-    st.caption(
-        "Accepted schemas:\n\n"
-        "• Utterance-level: call_id, timestamp (HH:MM:SS or seconds), speaker, text\n"
-        "• Raw transcript single column: parse lines like [HH:MM:SS AGENT]: message"
-    )
+    st.caption("Each row should contain a full transcript like `[01:19:57 AGENT]: message...`")
 
     st.divider()
-    st.header("Column Mapping")
+    st.header("Column Configuration")
     text_col = st.text_input(
-    "Select the column that contains the full transcript text (e.g. 'transcript', 'conversation')",
-    value="transcript",
+        "Select the column that contains the full transcript text",
+        value="transcript"
     )
     call_id_col = st.text_input(
-    "Optional: Call ID column name (if your file has one)", value=None
+        "Optional: Call ID column (if available in file)",
+        value=None
     )
 
-
+# ------------------------------------------------------------
+# Load embedded rules (cached)
+# ------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _load_rules_cached():
     return load_rules()
 
 try:
     rules_df = _load_rules_cached()
-    with st.expander("Rules loaded (overview)"):
-        st.write(
-            rules_df.select(
-                ["rule_id", "query_name", "industry", "category", "subcategory"]
-            )
+    with st.expander("Rules loaded successfully (first 20 rows)"):
+        st.dataframe(
+            rules_df.select(["rule_id", "query_name", "industry", "category", "subcategory"])
             .head(20)
-            .to_pandas()
+            .to_pandas(),
+            use_container_width=True,
         )
 except Exception as e:
     st.error(f"Failed to load embedded rules: {e}")
     st.stop()
 
-def to_seconds(x) -> int:
-    if x is None:
-        return 0
-    if isinstance(x, (int, float)):
-        return int(x)
-    s = str(x).strip()
-    if s.isdigit():
-        return int(s)
-    try:
-        hh, mm, ss = s.split(":")
-        return int(hh) * 3600 + int(mm) * 60 + int(ss)
-    except Exception:
-        return 0
-
+# ------------------------------------------------------------
+# Main App Logic
+# ------------------------------------------------------------
 if up is not None:
     t0 = time.time()
+
+    # Read input file
     raw_df = read_any_to_polars(up.getvalue(), up.name)
-    st.success(f"Loaded file: {up.name} (rows: {raw_df.height:,}, cols: {len(raw_df.columns)})")
+    st.success(f"✅ Loaded file: {up.name} — {raw_df.height:,} rows, {len(raw_df.columns)} columns")
 
-    if parse_raw:
-        utter = explode_raw_transcript_column(raw_df, raw_col=text_col, call_id_col=call_id_col)
-    else:
-        utter = ensure_columns(raw_df, call_id_col, ts_col, speaker_col, text_col)
-        utter = utter.with_columns([
-            pl.col("timestamp").map_elements(to_seconds).cast(pl.Int64),
-            pl.col("speaker").str.to_uppercase(),
-        ])
+    # Parse transcripts into utterances
+    st.info("📄 Splitting transcript lines into speaker and timestamp segments...")
+    utter = explode_raw_transcript_column(raw_df, raw_col=text_col, call_id_col=call_id_col)
+    st.success(f"Utterances extracted: {utter.height:,}")
 
-    st.info(f"Utterance rows prepared: {utter.height:,}")
-
-    with st.spinner("Running DuckDB rule engine..."):
+    # Categorize with DuckDB rules
+    with st.spinner("⚙️ Applying categorization rules via DuckDB..."):
         matches, journey = categorize_utterances(utter, rules_df)
 
+    # Display results
     left, right = st.columns([3, 2])
     with left:
-        section("Per-utterance Matches")
+        section("Per-Utterance Matches")
         st.dataframe(matches.head(500).to_pandas(), use_container_width=True, height=420)
-        section("Journey Summary (per call)")
+
+        section("Journey Summary (Per Call)")
         st.dataframe(journey.to_pandas(), use_container_width=True, height=300)
 
     with right:
@@ -111,6 +102,7 @@ if up is not None:
                 .sort("hits", descending=True)
                 .head(30)
             ).to_pandas()
+
             bar = (
                 alt.Chart(chart_df)
                 .mark_bar()
@@ -123,29 +115,32 @@ if up is not None:
             )
             st.altair_chart(bar, use_container_width=True)
 
-        section("Speaker Term Buckets")
+        section("Speaker Term Highlights")
         buckets = speaker_term_buckets(utter)
         if not buckets.is_empty():
             st.dataframe(buckets.to_pandas(), use_container_width=True, height=300)
 
+    # ------------------------------------------------------------
+    # Download outputs
+    # ------------------------------------------------------------
     section("Downloads")
-    matches_bytes = io.BytesIO()
-    matches.write_parquet(matches_bytes)
+    matches_parquet = io.BytesIO()
+    matches.write_parquet(matches_parquet)
     st.download_button(
-        "Download Matches (Parquet)",
-        data=matches_bytes.getvalue(),
-        file_name="categorized_results.parquet",
+        "⬇️ Download Matches (Parquet)",
+        data=matches_parquet.getvalue(),
+        file_name="categorized_results.parquet"
     )
 
-    xlsx_bytes = io.BytesIO()
-    matches.to_pandas().to_excel(xlsx_bytes, index=False)
+    matches_xlsx = io.BytesIO()
+    matches.to_pandas().to_excel(matches_xlsx, index=False)
     st.download_button(
-        "Download Matches (Excel)",
-        data=xlsx_bytes.getvalue(),
-        file_name="categorized_results.xlsx",
+        "⬇️ Download Matches (Excel)",
+        data=matches_xlsx.getvalue(),
+        file_name="categorized_results.xlsx"
     )
 
-    st.caption(f"Processed in {(time.time()-t0):.2f}s")
+    st.caption(f"Processed in {(time.time() - t0):.2f} seconds")
 
 else:
-    st.info("Upload a transcript file to get started. Embed your rules at rules/rules_embedded.csv or .parquet before running.")
+    st.info("👆 Upload a transcript file to begin analysis.")
