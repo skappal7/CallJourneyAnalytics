@@ -81,22 +81,61 @@ def explode_raw_transcript_column(
     df: pl.DataFrame, raw_col: str, call_id_col: str = None
 ) -> pl.DataFrame:
     """
-    Split single-column transcripts into multiple utterance rows.
-    Expected pattern: [HH:MM:SS SPEAKER]: text
+    Splits a raw transcript column (e.g., '[01:19:57 AGENT]: message')
+    into structured rows with timestamp, speaker, and text.
+    Gracefully handles missing/empty rows.
     """
     rows = []
-    for rec in df.to_dicts():
-        call_id = rec.get(call_id_col, "CALL_1")
-        for ln in str(rec.get(raw_col, "")).splitlines():
-            m = TRANSCRIPT_LINE_RE.match(ln)
-            if m:
-                h, mnt, s = int(m.group("h")), int(m.group("m")), int(m.group("s"))
+
+    # ✅ Check if the column exists
+    if raw_col not in df.columns:
+        raise ValueError(
+            f"Column '{raw_col}' not found. Available columns: {df.columns}"
+        )
+
+    # ✅ Iterate through transcripts safely
+    for i, rec in enumerate(df.to_dicts(), start=1):
+        raw_value = str(rec.get(raw_col, "")).strip()
+        if not raw_value:
+            continue
+
+        call_id = (
+            rec.get(call_id_col)
+            if call_id_col and call_id_col in rec
+            else f"CALL_{i}"
+        )
+
+        # Split into lines
+        for ln in raw_value.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+
+            # ✅ More robust regex to catch variations
+            match = re.match(
+                r"^\[(\d{2}):(\d{2}):(\d{2})\]\s*([A-Za-z ]+)\s*:\s*(.*)$", ln
+            )
+            if match:
+                h, m, s = map(int, match.group(1, 2, 3))
                 rows.append(
                     {
                         "call_id": call_id,
-                        "timestamp": h * 3600 + mnt * 60 + s,
-                        "speaker": m.group("speaker").strip().upper(),
-                        "text": m.group("text").strip(),
+                        "timestamp": h * 3600 + m * 60 + s,
+                        "speaker": match.group(4).strip().upper(),
+                        "text": match.group(5).strip(),
                     }
                 )
+
+    # ✅ Handle empty case gracefully
+    if not rows:
+        st.warning(
+            f"⚠️ No valid transcript lines were found in column '{raw_col}'. "
+            "Check if your data matches the expected format: "
+            "[HH:MM:SS SPEAKER]: message"
+        )
+        return pl.DataFrame(
+            {"call_id": [], "timestamp": [], "speaker": [], "text": []}
+        )
+
     return pl.from_dicts(rows)
+
