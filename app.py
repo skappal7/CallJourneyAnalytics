@@ -35,14 +35,36 @@ with st.sidebar:
 
     st.divider()
     st.header("Column Configuration")
-    text_col = st.text_input(
-        "Select the column that contains the full transcript text",
-        value="transcript"
+
+    # This will update dynamically after the file upload
+    if up is not None:
+        # Read the file headers first (without full processing)
+        try:
+            temp_df = read_any_to_polars(up.getvalue(), up.name)
+            column_options = temp_df.columns
+            st.success(f"Detected columns: {column_options}")
+        except Exception as e:
+            st.error(f"Could not read columns: {e}")
+            column_options = []
+    else:
+        column_options = []
+
+    text_col = st.selectbox(
+        "Select the column containing the full transcript text",
+        options=column_options if column_options else ["(upload file first)"],
+        index=0 if column_options else 0,
+        help="This column should contain the full conversation text, e.g. [HH:MM:SS AGENT]: message",
     )
-    call_id_col = st.text_input(
-        "Optional: Call ID column (if available in file)",
-        value=None
+
+    call_id_col = st.selectbox(
+        "Optional: Select Call ID column (if your file has one)",
+        options=["None"] + column_options if column_options else ["None"],
+        index=0,
+        help="If your dataset includes unique call IDs, select it here; otherwise each row will be treated as a separate call.",
     )
+    if call_id_col == "None":
+        call_id_col = None
+
 
 # ------------------------------------------------------------
 # Load embedded rules (cached)
