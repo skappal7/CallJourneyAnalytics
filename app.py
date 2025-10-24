@@ -34,16 +34,14 @@ with st.sidebar:
 
     st.divider()
     st.header("Column Mapping")
-    call_id_col = st.text_input("Call ID column (if present)", value="call_id")
-    ts_col = st.text_input("Timestamp column", value="timestamp")
-    speaker_col = st.text_input("Speaker column", value="speaker")
-    text_col = st.text_input("Text column or Raw Transcript column", value="text")
-
-    st.divider()
-    st.header("Processing")
-    parse_raw = st.checkbox(
-        "Parse raw transcript column (split [HH:MM:SS SPEAKER]: ...)", value=False
+    text_col = st.text_input(
+    "Select the column that contains the full transcript text (e.g. 'transcript', 'conversation')",
+    value="transcript",
     )
+    call_id_col = st.text_input(
+    "Optional: Call ID column name (if your file has one)", value=None
+    )
+
 
 @st.cache_resource(show_spinner=False)
 def _load_rules_cached():
@@ -83,7 +81,7 @@ if up is not None:
     st.success(f"Loaded file: {up.name} (rows: {raw_df.height:,}, cols: {len(raw_df.columns)})")
 
     if parse_raw:
-        utter = explode_raw_transcript_column(raw_df, raw_col=text_col, call_id_col=call_id_col or None)
+        utter = explode_raw_transcript_column(raw_df, raw_col=text_col, call_id_col=call_id_col)
     else:
         utter = ensure_columns(raw_df, call_id_col, ts_col, speaker_col, text_col)
         utter = utter.with_columns([
